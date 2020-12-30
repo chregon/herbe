@@ -8,7 +8,8 @@
 #include <string.h>
 #include <stdarg.h>
 #include <fcntl.h>
-#include <semaphore.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #include "config.h"
 
@@ -80,13 +81,23 @@ void expire(int sig)
 	XFlush(display);
 }
 
+void read_y_offset(unsigned int **offset, int *id) {
+    int shm_id = shmget(8432, sizeof(unsigned int), IPC_CREAT | 0660);
+    if (shm_id == -1) die("shmget failed");
+
+    *offset = (unsigned int *)shmat(shm_id, 0, 0);
+    if (*offset == (unsigned int *)-1) die("shmat failed\n");
+    *id = shm_id;
+}
+
+void free_y_offset(int id) {
+    shmctl(id, IPC_RMID, NULL);
+}
+
 int main(int argc, char *argv[])
 {
 	if (argc == 1)
-	{
-		sem_unlink("/herbe");
-		die("Usage: %s body", argv[0]);
-	}
+        die("Usage: %s body", argv[0]);
 
 	struct sigaction act_expire, act_ignore;
 
@@ -166,16 +177,34 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	unsigned int x = screen_x + pos_x;
-	unsigned int y = screen_y + pos_y;
+//<<<<<<< ours
+//	unsigned int x = screen_x + pos_x;
+//	unsigned int y = screen_y + pos_y;
+//=======
+    int y_offset_id;
+    unsigned int *y_offset;
+    read_y_offset(&y_offset, &y_offset_id);
+
+//>>>>>>> theirs
 	unsigned int text_height = font->ascent - font->descent;
 	unsigned int height = (num_of_lines - 1) * line_spacing + num_of_lines * text_height + 2 * padding;
+	unsigned int x = pos_x;
+	unsigned int y = pos_y + *y_offset;
+
+    unsigned int used_y_offset = (*y_offset) += height + padding;
 
 	if (corner == TOP_RIGHT || corner == BOTTOM_RIGHT)
-		x = screen_x + screen_width - width - border_size * 2 - pos_x;
+//<<<<<<< ours
+//		x = screen_x + screen_width - width - border_size * 2 - pos_x;
+//
+//	if (corner == BOTTOM_LEFT || corner == BOTTOM_RIGHT)
+//		y = screen_y + screen_height - height - border_size * 2 - pos_y;
+//=======
+		x = screen_width - width - border_size * 2 - x;
 
 	if (corner == BOTTOM_LEFT || corner == BOTTOM_RIGHT)
-		y = screen_y + screen_height - height - border_size * 2 - pos_y;
+		y = screen_height - height - border_size * 2 - y;
+//>>>>>>> theirs
 
 	window = XCreateWindow(display, RootWindow(display, screen), x, y, width, height, border_size, DefaultDepth(display, screen),
 						   CopyFromParent, visual, CWOverrideRedirect | CWBackPixel | CWBorderPixel, &attributes);
@@ -185,9 +214,6 @@ int main(int argc, char *argv[])
 
 	XSelectInput(display, window, ExposureMask | ButtonPress);
 	XMapWindow(display, window);
-
-	sem_t *mutex = sem_open("/herbe", O_CREAT, 0644, 1);
-	sem_wait(mutex);
 
 	sigaction(SIGUSR1, &act_expire, 0);
 	sigaction(SIGUSR2, &act_expire, 0);
@@ -219,12 +245,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	sem_post(mutex);
-	sem_close(mutex);
 
 	for (int i = 0; i < num_of_lines; i++)
 		free(lines[i]);
 
+    if (used_y_offset == *y_offset) free_y_offset(y_offset_id);
 	free(lines);
 	XftDrawDestroy(draw);
 	XftColorFree(display, visual, colormap, &color);
